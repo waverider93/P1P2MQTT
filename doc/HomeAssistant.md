@@ -12,7 +12,7 @@ You can delete old MQTT topics and rebuild the new ones with the `MQTT_Delete_Ow
 
 The EEPROM data in the ESP includes MQTT server credentials and should survive a firmware update, but if that fails (especially for rc candidates shared by mail), you may encounter a bridge which connects to WiFi but not to MQTT. In that case you can either:
 - telnet to the bridge, and use the commands `P7 IPv4-MQTT-server`, and if necessary also `P8 MQTT-port-nr`, `P9 MQTT-username` and `P10 MQTT-password`, or
-- double-tap the reset-button until the blue LED lights up, connect to the AP  with SSID `P1P2MQTT-2x` and password `P1P2P3P4`, and enter WiFi and MQTT server credentials.
+- double-tap the reset-button until the blue LED lights up, connect to the AP  with SSID `P1P2MQTT-2x` and password `P1P2P3P4`, and enter WiFi and MQTT server credentials and select `configure router` or browse to [http://192.168.4.1](http://192.168.4.1).
 
 ##### Set up MQTT server
 

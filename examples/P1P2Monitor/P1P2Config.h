@@ -80,7 +80,7 @@
 #define SERIAL_MAGICSTRING "1P2P" // Serial input line should start with SERIAL_MAGICSTRING, otherwise input line is ignored
 #endif /* F_CPU */
 
-#define WELCOMESTRING "P1P2Monitor v0.9.59rc4"
+#define WELCOMESTRING "P1P2Monitor v0.9.59rc14"
 #define SW_PATCH_VERSION 59
 #define SW_MINOR_VERSION 9
 #define SW_MAJOR_VERSION 0
@@ -215,13 +215,19 @@
 #ifdef MHI_SERIES
 #define INIT_BRAND 4
 #define INIT_MODEL 0
+#define MHI_RC_DELAY             250  // ms delay before sending RC-E5 reply (per spec) - 250ms for A slave, 350 for B slave
 #endif
 
 #ifdef EF_SERIES
 // Write budget: thottle parameter writes to limit flash memory wear
-#define INIT_WRITE_BUDGET_PERIOD 60 // on avg max one write per 60m allowed
 #define MAX_WRITE_BUDGET        100 // budget never incremented beyond this value (so don't allow to burn more than 100 writes at once)
-#define INIT_WRITE_BUDGET        10 // initial write budget upon boot (255 = unlimited; recommended: 10)
+#ifdef E_SERIES
+#define INIT_WRITE_BUDGET_PERIOD  15 // on avg max one write per 15m allowed
+#define INIT_WRITE_BUDGET        100 // initial write budget upon boot (255 = unlimited; recommended: 100)
+#else /* E_SERIES */
+#define INIT_WRITE_BUDGET_PERIOD  60 // on avg max one write per 60m allowed
+#define INIT_WRITE_BUDGET         10 // initial write budget upon boot (255 = unlimited; recommended: 10)
+#endif /* E_SERIES */
 #define WR_CNT 1                    // number of write repetitions for writing a paramter. 1 should work reliably, no real need for higher value
 
 // Error budget: P1P2Monitor should not see any errors except upon start falling into a packet

@@ -270,6 +270,64 @@ char timeString2[23] = "Mo 2000-00-00 00:00:00"; // reads time from packet type 
 }
 
 //==================================================================================================================
+// MHI-specific climate macros — write topics point to bridge-side state-merging handlers
+
+#ifdef MHI_SERIES
+// mode_stat_t publishes string values directly ("off","auto","cool","heat","dry","fan_only")
+#define MHI_HADEVICE_CLIMATE_MODES(mode_stat_topic) { \
+  topicCharSpecific('P'); \
+  HACONFIGMESSAGE_ADD( \
+    "\"mode_stat_t\":\"%s/%s\"," \
+    "\"mode_stat_tpl\":\"{{ value }}\"," \
+    "\"modes\":[\"off\",\"auto\",\"cool\",\"heat\",\"dry\",\"fan_only\"]," \
+    , mqttTopic, mode_stat_topic); \
+}
+// fan_mode_stat_t publishes numeric 1/2/3 — template converts to HA strings
+#define MHI_HADEVICE_CLIMATE_FAN_MODES(fan_stat_topic) { \
+  topicCharSpecific('P'); \
+  HACONFIGMESSAGE_ADD( \
+    "\"fan_mode_stat_t\":\"%s/%s\"," \
+    "\"fan_mode_stat_tpl\":\"{%% set m={'1':'low','2':'medium','3':'high'} %%}{{ m[value] if value in m else 'low' }}\"," \
+    "\"fan_modes\":[\"low\",\"medium\",\"high\"]," \
+    , mqttTopic, fan_stat_topic); \
+}
+// Command topics use the bridge-side per-parameter write topics (defined in P1P2MQTT-bridge.ino)
+#define MHI_HADEVICE_CLIMATE_MODE_COMMAND() { \
+  HACONFIGMESSAGE_ADD( \
+    "\"mode_cmd_t\":\"%s\"," \
+    "\"mode_cmd_tpl\":\"{{ value }}\"," \
+    , mhiModeWriteTopic); \
+}
+#define MHI_HADEVICE_CLIMATE_TEMP_COMMAND() { \
+  HACONFIGMESSAGE_ADD( \
+    "\"temp_cmd_t\":\"%s\"," \
+    "\"temp_cmd_tpl\":\"{{ value }}\"," \
+    , mhiTempWriteTopic); \
+}
+#define MHI_HADEVICE_CLIMATE_FAN_COMMAND() { \
+  HACONFIGMESSAGE_ADD( \
+    "\"fan_mode_cmd_t\":\"%s\"," \
+    "\"fan_mode_cmd_tpl\":\"{{ value }}\"," \
+    , mhiFanWriteTopic); \
+}
+// swing_mode_stat_t publishes "swing","top","mid_top","mid_bottom","bottom" directly
+#define MHI_HADEVICE_CLIMATE_SWING_MODES(swing_stat_topic) { \
+  topicCharSpecific('P'); \
+  HACONFIGMESSAGE_ADD( \
+    "\"swing_mode_stat_t\":\"%s/%s\"," \
+    "\"swing_mode_stat_tpl\":\"{{ value }}\"," \
+    "\"swing_modes\":[\"swing\",\"top\",\"mid_top\",\"mid_bottom\",\"bottom\"]," \
+    , mqttTopic, swing_stat_topic); \
+}
+#define MHI_HADEVICE_CLIMATE_SWING_COMMAND() { \
+  HACONFIGMESSAGE_ADD( \
+    "\"swing_mode_cmd_t\":\"%s\"," \
+    "\"swing_mode_cmd_tpl\":\"{{ value }}\"," \
+    , mhiSwingWriteTopic); \
+}
+#endif /* MHI_SERIES */
+
+//==================================================================================================================
 
 #define HADEVICE_AVAILABILITY(availability_topic, on_value, off_value) { \
   topicCharSpecific('P'); \
@@ -455,11 +513,11 @@ bool scheduleMemSeen[2][SCHEDULE_MEM_SIZE] = {}; // 2 * 1166 = 2332 bytes
 #define PCKTP_ARR_SZ ((2 * PCKTP_ARR_BLOCK) + 1)
 //byte packetsrc                                   = { 00                                                                                                                                                                                          , 40                                                                                                                                                                                         ,    80 }
 //byte packettype                                  = { 08,  09,  0A,  0B,  0C,  0D,  0E,  0F,  10,  11,  12,  15,  17,  18,  19,  1F,  20,  21,  30,  31,  32,  33,  34,  35,  36,  37,  38,  39,  3A,  3B,  3C,  3D,  3E,  3F,  80,  A1,  A3,  B1,  08,  09,  0A,  0B,  0C,  0D,  0E,  0F,  10,  11,  12,  15,  17,  18,  19,  1F,  20,  21,  30,  31,  32,  33,  34,  35,  36,  37,  38,  39,  3A,  3B,  3C,  3D,  3E,  3F,  80,  A1,  A3, B1 ,    18 }
-const PROGMEM uint32_t nr_bytes [PCKTP_ARR_SZ]     = {  0,  20,  20,  20,   0,  20,  20,  20,  20,  17,  17,  18,   6,   7,   5,   0,   1,  20,  20,  20,   8,   0,   5,  19,  19,   0,  20,  14,  18,  20,  12,   0,   0,   0,  10,  16,   0,  18,   0,  20,  20,  20,   0,  20,  20,  20,  20,  20,  20,  18,  11,  19,   4,  20,  20,  20,   0,  20,   1,   0,   0,   0,   0,   0,  20,   5,   8,  19,   2,   0,   0,   0,  10,  16,  19, 18,    11     };
-const PROGMEM uint32_t bytestart[PCKTP_ARR_SZ]     = {  0,   0,  20,  40,  60,  60,  80, 100, 120, 140, 157, 174, 192, 198, 205, 210, 210, 211, 231, 251, 271, 279, 279, 284, 303, 322, 322, 342, 356, 374, 394, 406, 406, 406, 406, 416, 432, 432, 450, 450, 470, 490, 510, 510, 530, 550, 570, 590, 610, 630, 648, 659, 678, 682, 702, 722, 742, 742, 762, 763, 763, 763, 763, 763, 763, 783, 788, 796, 815, 817, 817, 817, 817, 827, 843, 862, 880  /*, sizePayloadByteVal = 891 */ };
+const PROGMEM uint32_t nr_bytes [PCKTP_ARR_SZ]     = {  0,  20,  20,  20,   0,  20,  20,  20,  20,  20,  17,  18,   6,   7,   5,   0,   2,  20,  20,  20,   8,   0,   5,  19,  19,   0,  20,  20,  18,  20,  12,   0,   0,   0,  10,  16,   0,  18,   0,  20,  20,  20,   0,  20,  20,  20,  20,  20,  20,  18,  11,  19,   4,  20,  20,  20,   0,  20,   1,   0,   0,   0,   0,   0,  20,   5,   8,  19,   2,   0,   0,   0,  10,  16,  19, 18,    11     };
+const PROGMEM uint32_t bytestart[PCKTP_ARR_SZ]     = {  0,   0,  20,  40,  60,  60,  80, 100, 120, 140, 160, 177, 195, 201, 208, 213, 213, 215, 235, 255, 275, 283, 283, 288, 307, 326, 326, 346, 366, 384, 404, 416, 416, 416, 416, 426, 442, 442, 460, 460, 480, 500, 520, 520, 540, 560, 580, 600, 620, 640, 658, 669, 688, 692, 712, 732, 752, 752, 772, 773, 773, 773, 773, 773, 773, 793, 798, 806, 825, 827, 827, 827, 827, 837, 853, 872, 890  /*, sizePayloadByteVal = 901 */ };
 
-#define sizePayloadByteVal  891
-#define sizePayloadByteSeen 112 // ceil(891/8)
+#define sizePayloadByteVal  901
+#define sizePayloadByteSeen 113 // ceil(901/8)
 
 #define sizePayloadBitsSeen 1
 
@@ -1451,6 +1509,7 @@ void checkSize() {
   }
 #endif /* E_SERIES */
   for (uint16_t i = 1; i < PCKTP_ARR_SZ; i++) {
+    if (bytestart[i - 1] + nr_bytes[i - 1] >= sizePayloadByteVal) break; // stop at last valid entry
     if (bytestart[i] != bytestart[i - 1] + nr_bytes[i - 1]) printfTopicS("bytestart error i %i bytestart[i] 0x%04X bytestart[i-1] 0x%04X nr_bytes[i-1]", i, bytestart[i], bytestart[i-1], nr_bytes[i-1]);
   }
 }
@@ -1518,7 +1577,7 @@ uint16_t newCheckPayloadBytesVal(byte packetSrc, byte packetDst, byte packetType
 #ifdef W_SERIES
     if (packetType != 0x0C)
 #endif /* W_SERIES */
-    printfTopicS("Warning: payloadIndex %i > expected %i for Src 0x%02X", payloadIndex, nr_bytes[pti], packetSrc);
+    printfTopicS("Warning: payloadIndex %i >= expected %i for Src 0x%02X", payloadIndex, nr_bytes[pti], packetSrc);
     return 0;
   }
 #endif /* MHI_SERIES */
@@ -1548,7 +1607,7 @@ uint16_t newCheckPayloadBytesVal(byte packetSrc, byte packetDst, byte packetType
     return 0;
   }
   if (length && (payloadIndex >= nr_bytes[pti])) {
-    printfTopicS("Warning: payloadIndex %i > expected %i for Src 0x%02X Type 0x%02X", payloadIndex, nr_bytes[pti], packetSrc, packetType);
+    printfTopicS("Warning: payloadIndex %i >= expected %i for Src 0x%02X Type 0x%02X", payloadIndex, nr_bytes[pti], packetSrc, packetType);
     pti = 0xFF; // for BitsVal
     return 0;
   }
@@ -2191,7 +2250,11 @@ uint8_t param_value_s16fan_LE(byte paramSrc, byte paramPacketType, uint16_t para
     return 0;
   }
   int16_t v = (uint16_t) u_payloadValue_LE(payload + payloadIndex, paramValLength);
-  if (v) v = 450 + 25 * v;
+  if (v > 0) {
+    v = 450 + 25 * v;
+  } else {
+    v = 0;
+  }
   snprintf(mqtt_value, MQTT_VALUE_LEN, "%u", v);
   return publishEntityParam(paramSrc, paramPacketType, paramNr, payloadIndex, payload, mqtt_value, paramValLength);
 }
@@ -2671,7 +2734,7 @@ void field_setting(byte packetSrc, byte packetType, byte payloadIndex, byte* pay
     M.paramVal[0][ptbv + 0] = payload[payloadIndex - 3] & 0x3F;
     M.paramVal[0][ptbv + 1] = payload[payloadIndex - 2];
     M.paramVal[0][ptbv + 2] = payload[payloadIndex - 1];
-    M.paramVal[0][ptbv + 3] = payload[payloadIndex - 0] & 0x7E;
+    M.paramVal[0][ptbv + 3] = payload[payloadIndex - 0] & 0xFE;
     M.paramSeen[0][ptbs >> 3] |= (1 << (ptbs & 0x07));
   }
 }
@@ -2684,7 +2747,7 @@ void param_field_setting(byte paramSrc, byte paramPacketType, uint16_t paramNr, 
 }
 
 uint8_t publishFieldSetting(byte paramNr) {
-  byte  ppti = 0x39 - PARAM_TP_START;
+  ppti = 0x39 - PARAM_TP_START;
   ppts = 0; // for setting seen in publishEntityParam
   ptbs = seenstart[ppti] + paramNr;
   uint16_t ptbv = valstart[ppti] + paramNr * parnr_bytes[ppti];
@@ -2852,7 +2915,7 @@ uint8_t handleParam(byte paramSrc, byte paramPacketType, byte payloadIndex, byte
         case 0x03   : SUBDEVICE("_Mode");    HACONFIG;          CAT_MEASUREMENT; HADEVICE_SENSOR; PARAM_KEY("Fan_RPM"); PARAM_VALUE_s16fan_LE; // EPRA18: 0 or 450+25*value
         case 0x04   :                        HACONFIG;          CAT_MEASUREMENT; HADEVICE_SENSOR; PARAM_KEY("Param15_04"); PARAM_VALUE_s16_LE; // binary ?
         case 0x05   : SUBDEVICE("_Sensors"); HACONFIG; HATEMP1;                  HADEVICE_SENSOR; PARAM_KEY("Temperature_Refrigerant_Q_param15"); PARAM_VALUE_s16div10_LE;
-        case 0x06   :                        HACONFIG; HATEMP1;               HADEVICE_BINSENSOR; PARAM_KEY("Defrost_Active_param15"); PARAM_VALUE_s16div10_LE; // defrost_activity
+        case 0x06   :                        HACONFIG;                           HADEVICE_BINSENSOR; PARAM_KEY("Defrost_Active_param15"); PARAM_VALUE_s16_LE; // defrost_activity
         case 0x07   :                        HACONFIG;          CAT_MEASUREMENT; HADEVICE_SENSOR; PARAM_KEY("Param15_07"); PARAM_VALUE_s16_LE; // binary ?
         case 0x08   : SUBDEVICE("_Sensors"); HACONFIG; HATEMP1;                  HADEVICE_SENSOR; PARAM_KEY("Temperature_Outside_param15"); PARAM_VALUE_s16div10_LE;
 
@@ -3966,7 +4029,7 @@ byte bytesbits2keyvalue(byte packetSrc, byte packetDst, byte packetType, byte pa
           case    8 : bcnt = 20; BITBASIS;
           case    0 : SUBDEVICE("_Unknown");                         HACONFIG;                                              KEYBIT_PUB_CONFIG_PUB_ENTITY("Climate_On_Q"); // heatpump_enabled??? (preferential related ?)
           case    2 : SUBDEVICE("_Unknown");                         HACONFIG;                                              KEYBIT_PUB_CONFIG_PUB_ENTITY("Climate_Related_Q");
-          case    6 : SUBDEVICE("_Mode");                            HACONFIG;                                              KEYBIT_PUB_CONFIG_PUB_ENTITY("Compressor2_Q");
+          case    6 : SUBDEVICE("_Mode");                            HACONFIG;                                              KEYBIT_PUB_CONFIG_PUB_ENTITY("Compressor_Climate"); // heating, perhaps also cooling
           case    7 : if (!(M.R.useDHW & 0x02)) return 0;
                       SUBDEVICE("_DHW");                             HACONFIG;                                              KEYBIT_PUB_CONFIG_PUB_ENTITY("DHW_Demand");
           default   : UNKNOWN_BIT;
@@ -5805,13 +5868,8 @@ byte bytesbits2keyvalue(byte packetSrc, byte packetDst, byte packetType, byte pa
                       HADEVICE_CLIMATE_TEMPERATURE_COMMAND("{{'F3802%02X'|format(value|int)}}");
                       // modes byte 0 (off/on) and 1 (mode) in 40F038
                       //
-#ifdef Use_HA_and_off
-                      HADEVICE_CLIMATE_MODES("S/2/Target_Operating_Mode_HA", "\"off\",\"auto\",\"heat\",\"cool\",\"dry\",\"fan_only\"","'0':'off','96':'fan_only','97':'heat','98':'cool','99':'auto','103':'dry'");
+                      HADEVICE_CLIMATE_MODES("S/2/Target_Operating_Mode", "\"off\",\"auto\",\"heat\",\"cool\",\"dry\",\"fan_only\"","'0':'off','96':'fan_only','97':'heat','98':'cool','99':'auto','103':'dry'");
                       HADEVICE_CLIMATE_MODE_COMMAND_TEMPLATE("{% set modesM={'off':0,'auto':1,'heat':1,'cool':1,'dry':1,'fan_only':1} %}{% set modes={'off':0,'auto':99,'heat':97,'cool':98,'dry':103,'fan_only':96} %}{{('F380001 3801%02X'|format((modes[value]|int) if value in modes.keys() else 0)) if (modesM[value]) else 'F380000'}}");
-#else
-                      HADEVICE_CLIMATE_MODES("S/2/Target_Operating_Mode", "\"auto\",\"heat\",\"cool\",\"dry\",\"fan_only\"","'96':'fan_only','97':'heat','98':'cool','99':'auto','103':'dry'");
-                      HADEVICE_CLIMATE_MODE_COMMAND_TEMPLATE("{% set modes={'auto':99,'heat':97,'cool':98,'dry':103,'fan_only':96} %}{{'F3801%02X'|format((modes[value]|int) if value in modes.keys() else 99)}}");
-#endif
                       // fan_modes, fan speed heating, byte 8 in 40F038
                       HADEVICE_CLIMATE_FAN_MODES("S/2/Fan_Speed_Cooling", "\"low\",\"medium\",\"high\"", "'17':'low','49':'medium','81':'high'"); // some models perhaps also auto mode?
                       HADEVICE_CLIMATE_FAN_MODE_COMMAND_TEMPLATE("{% set modes={'low':17,'medium':49,'high':81} %} {{'F3804%02X'|format((modes[value]|int) if value in modes.keys() else 17)}} ");
@@ -5838,13 +5896,8 @@ byte bytesbits2keyvalue(byte packetSrc, byte packetDst, byte packetType, byte pa
                       HADEVICE_CLIMATE_TEMPERATURE_CURRENT("T/0/Temperature_Room");
                       HADEVICE_CLIMATE_TEMPERATURE_COMMAND("{{'F3806%02X'|format(value|int)}}");
                       // modes byte 0 (off/on) and 1 (mode) in 40F038
-#ifdef Use_HA_and_off
-                      HADEVICE_CLIMATE_MODES("S/2/Target_Operating_Mode_HA", "\"off\",\"auto\",\"heat\",\"cool\",\"dry\",\"fan_only\"","'0':'off','96':'fan_only','97':'heat','98':'cool','99':'auto','103':'dry'");
+                      HADEVICE_CLIMATE_MODES("S/2/Target_Operating_Mode", "\"off\",\"auto\",\"heat\",\"cool\",\"dry\",\"fan_only\"","'0':'off','96':'fan_only','97':'heat','98':'cool','99':'auto','103':'dry'");
                       HADEVICE_CLIMATE_MODE_COMMAND_TEMPLATE("{% set modesM={'off':0,'auto':1,'heat':1,'cool':1,'dry':1,'fan_only':1} %}{% set modes={'off':0,'auto':99,'heat':97,'cool':98,'dry':103,'fan_only':96} %}{{('F380001 3801%02X'|format((modes[value]|int) if value in modes.keys() else 0)) if (modesM[value]) else 'F380000'}}");
-#else
-                      HADEVICE_CLIMATE_MODES("S/2/Target_Operating_Mode", "\"auto\",\"heat\",\"cool\",\"dry\",\"fan_only\"","'96':'fan_only','97':'heat','98':'cool','99':'auto','103':'dry'");
-                      HADEVICE_CLIMATE_MODE_COMMAND_TEMPLATE("{% set modes={'auto':99,'heat':97,'cool':98,'dry':103,'fan_only':96} %}{{'F3801%02X'|format((modes[value]|int) if value in modes.keys() else 99)}}");
-#endif
                       // fan_modes, fan speed heating, byte 8 in 40F038
                       HADEVICE_CLIMATE_FAN_MODES("S/2/Fan_Speed_Heating", "\"low\",\"medium\",\"high\"", "'17':'low','49':'medium','81':'high'"); // some models perhaps also auto mode?
                       HADEVICE_CLIMATE_FAN_MODE_COMMAND_TEMPLATE("{% set modes={'low':17,'medium':49,'high':81} %} {{'F3808%02X'|format((modes[value]|int) if value in modes.keys() else 17)}} ");
@@ -5946,13 +5999,8 @@ byte bytesbits2keyvalue(byte packetSrc, byte packetDst, byte packetType, byte pa
                       HADEVICE_CLIMATE_TEMPERATURE_CURRENT("T/0/Temperature_Room");
                       HADEVICE_CLIMATE_TEMPERATURE_COMMAND("{{'F3B02%02X'|format(value|int)}}");
                       // modes byte 0 (off/on) and 1 (mode) in 40F03B
-#ifdef Use_HA_and_off
-                      HADEVICE_CLIMATE_MODES("S/2/Target_Operating_Mode_HA", "\"off\",\"auto\",\"heat\",\"cool\",\"dry\",\"fan_only\"","'0':'off','96':'fan_only','97':'heat','98':'cool','99':'auto','103':'dry'");
+                      HADEVICE_CLIMATE_MODES("S/2/Target_Operating_Mode", "\"off\",\"auto\",\"heat\",\"cool\",\"dry\",\"fan_only\"","'0':'off','96':'fan_only','97':'heat','98':'cool','99':'auto','103':'dry'");
                       HADEVICE_CLIMATE_MODE_COMMAND_TEMPLATE("{% set modesM={'off':0,'auto':1,'heat':1,'cool':1,'dry':1,'fan_only':1} %}{% set modes={'off':0,'auto':99,'heat':97,'cool':98,'dry':103,'fan_only':96} %}{{('F3B0001 3801%02X'|format((modes[value]|int) if value in modes.keys() else 0)) if (modesM[value]) else 'F3B0000'}}");
-#else
-                      HADEVICE_CLIMATE_MODES("S/2/Target_Operating_Mode", "\"auto\",\"heat\",\"cool\",\"dry\",\"fan_only\"","'96':'fan_only','97':'heat','98':'cool','99':'auto','103':'dry'");
-                      HADEVICE_CLIMATE_MODE_COMMAND_TEMPLATE("{% set modes={'auto':99,'heat':97,'cool':98,'dry':103,'fan_only':96} %}{{'F3B01%02X'|format((modes[value]|int) if value in modes.keys() else 99)}}");
-#endif
                       // fan_modes, fan speed heating, byte 8 in 40F03B
                       HADEVICE_CLIMATE_FAN_MODES("S/2/Fan_Speed_Cooling", "\"low\",\"medium\",\"high\"", "'17':'low','49':'medium','81':'high'"); // some models perhaps also auto mode?
                       HADEVICE_CLIMATE_FAN_MODE_COMMAND_TEMPLATE("{% set modes={'low':17,'medium':49,'high':81} %} {{'F3B04%02X'|format((modes[value]|int) if value in modes.keys() else 17)}} ");
@@ -5983,13 +6031,8 @@ byte bytesbits2keyvalue(byte packetSrc, byte packetDst, byte packetType, byte pa
                       }
                       HADEVICE_CLIMATE_TEMPERATURE_COMMAND("{{'F3B06%02X'|format(value|int)}}");
                       // modes byte 0 (off/on) and 1 (mode) in 40F03B
-#ifdef Use_HA_and_off
-                      HADEVICE_CLIMATE_MODES("S/2/Target_Operating_Mode_HA", "\"off\",\"auto\",\"heat\",\"cool\",\"dry\",\"fan_only\"","'0':'off','96':'fan_only','97':'heat','98':'cool','99':'auto','103':'dry'");
+                      HADEVICE_CLIMATE_MODES("S/2/Target_Operating_Mode", "\"off\",\"auto\",\"heat\",\"cool\",\"dry\",\"fan_only\"","'0':'off','96':'fan_only','97':'heat','98':'cool','99':'auto','103':'dry'");
                       HADEVICE_CLIMATE_MODE_COMMAND_TEMPLATE("{% set modesM={'off':0,'auto':1,'heat':1,'cool':1,'dry':1,'fan_only':1} %}{% set modes={'off':0,'auto':99,'heat':97,'cool':98,'dry':103,'fan_only':96} %}{{('F3B0001 3801%02X'|format((modes[value]|int) if value in modes.keys() else 0)) if (modesM[value]) else 'F3B0000'}}");
-#else
-                      HADEVICE_CLIMATE_MODES("S/2/Target_Operating_Mode", "\"auto\",\"heat\",\"cool\",\"dry\",\"fan_only\"","'96':'fan_only','97':'heat','98':'cool','99':'auto','103':'dry'");
-                      HADEVICE_CLIMATE_MODE_COMMAND_TEMPLATE("{% set modes={'auto':99,'heat':97,'cool':98,'dry':103,'fan_only':96} %}{{'F3B01%02X'|format((modes[value]|int) if value in modes.keys() else 99)}}");
-#endif
                       // fan_modes, fan speed heating, byte 8 in 40F03B
                       HADEVICE_CLIMATE_FAN_MODES("S/2/Fan_Speed_Heating", "\"low\",\"medium\",\"high\"", "'17':'low','49':'medium','81':'high'"); // some models perhaps also auto mode?
                       HADEVICE_CLIMATE_FAN_MODE_COMMAND_TEMPLATE("{% set modes={'low':17,'medium':49,'high':81} %} {{'F3B08%02X'|format((modes[value]|int) if value in modes.keys() else 17)}} ");
@@ -6172,7 +6215,7 @@ byte bytesbits2keyvalue(byte packetSrc, byte packetDst, byte packetType, byte pa
   SRC(src); // set SRC char in mqttTopic
 
   switch (packetType) {
-#include "P1P2_Pseudo.h"
+#include "P1P2_ParameterConversion/P1P2_Pseudo.h"
     default : return 0; // UNKNOWN_BYTE // unknown PacketByte
   }
 
@@ -6206,6 +6249,53 @@ byte bytesbits2keyvalue(byte packetSrc, byte packetDst, byte packetType, byte pa
                     case 0x00 ... 0x07 : bcnt = packetSrc; break;
                     case 0x80 ... 0x81 : bcnt = 0x08 + (packetSrc - 0x80); break;
                     default            : /* should not happen */; break;
+                  }
+                  // Publish combined MHI_Mode string and HA CLIMATE entity for src 0x00 (master→FDUM)
+                  if (packetSrc == 0x00) {
+                    byte pb = payload[payloadIndex];
+                    const char* modeStr = !(pb & 0x01)            ? "off"
+                                        : ((pb >> 2) & 0x07) == 0 ? "auto"
+                                        : ((pb >> 2) & 0x07) == 1 ? "dry"
+                                        : ((pb >> 2) & 0x07) == 2 ? "cool"
+                                        : ((pb >> 2) & 0x07) == 3 ? "fan_only"
+                                        :                            "heat";
+                    HADEVICE_CLIMATE;
+                    QOS_CLIMATE;
+                    HATEMP1;
+                    CHECK(1);
+                    printfTopicS("MHI: src00 pi=%i pb=0x%02X pubHa=%d haCfg=%d", payloadIndex, pb, pubHa ? 1 : 0, haConfig);
+                    if (pubHa) {
+                      MHI_HADEVICE_CLIMATE_MODES("S/0/MHI_Mode");
+                      HADEVICE_CLIMATE_TEMPERATURE("S/0/Set_Temp", 16, 30, 0.5);
+                      HADEVICE_CLIMATE_TEMPERATURE_CURRENT("T/2/RC_Indoor_Temp");
+                      MHI_HADEVICE_CLIMATE_FAN_MODES("S/0/Fan_Speed");
+                      MHI_HADEVICE_CLIMATE_MODE_COMMAND();
+                      MHI_HADEVICE_CLIMATE_TEMP_COMMAND();
+                      MHI_HADEVICE_CLIMATE_FAN_COMMAND();
+                      MHI_HADEVICE_CLIMATE_SWING_MODES("S/0/MHI_Swing");
+                      MHI_HADEVICE_CLIMATE_SWING_COMMAND();
+                      CAT_SETTING;
+                      KEY("MHI_Climate");
+                      printfTopicS("MHI: publishing climate HA config pb=0x%02X mLen=%i", pb, haConfigMessageLength);
+                      PUB_CONFIG;
+                    }
+                    // Publish combined mode string to S/0/MHI_Mode
+                    // Use publishEntityByte so payloadByteSeen is set, preventing config re-publish every frame
+                    KEY("MHI_Mode");
+                    snprintf(mqtt_value, MQTT_VALUE_LEN, "%s", modeStr);
+                    publishEntityByte(packetSrc, packetType, payloadIndex, payload, mqtt_value, 1);
+                    // Publish swing/vane state to S/0/MHI_Swing
+                    // Derived from byte3 bit6 (swing flag) and byte4 bits5-4 (vane position)
+                    { byte vane = (payload[payloadIndex + 1] >> 4) & 0x03;
+                      const char* swingStr = (pb & 0x40)  ? "swing"
+                                           : (vane == 0)  ? "top"
+                                           : (vane == 1)  ? "mid_top"
+                                           : (vane == 2)  ? "mid_bottom"
+                                           :                "bottom";
+                      KEY("MHI_Swing");
+                      snprintf(mqtt_value, MQTT_VALUE_LEN, "%s", swingStr);
+                      clientPublish(mqtt_value, haQos);
+                    }
                   }
                   BITBASIS;
         case  6 :                                                                                                           KEYBIT_PUB_CONFIG_PUB_ENTITY("Swing");
@@ -6270,9 +6360,17 @@ void unSeen() {
   UNSEEN_BYTE_00_10_19_CLIMATE_DHW;
   UNSEEN_BYTE_40_0F_10_HEATING_ONLY;
 #endif /* E_SERIES */
+#ifdef MHI_SERIES
+  // Mark mode/power/swing byte (payloadIndex 1, packetSrc 0x00) as unseen
+  // so the MHI_Climate HA discovery config is republished on HA reconnect / MQTT Rebuild
+  registerUnseenByte(0x00, 0x00, 0x00, 1);
+#endif /* MHI_SERIES */
 }
 
 byte bits2keyvalue(byte packetSrc, byte packetDst, byte packetType, byte payloadIndex, byte* payload, byte j) {
+#ifdef F_SERIES
+  if ((packetSrc & 0xF0) == 0x40) packetSrc == 0x40;
+#endif /* F_SERIES */
   byte b = bytesbits2keyvalue(packetSrc, packetDst, packetType, payloadIndex, payload, j) ;
   return b;
 }

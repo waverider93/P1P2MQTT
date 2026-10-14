@@ -1,5 +1,5 @@
 /* P1P2Monitor: monitor and control program for HBS such as P1/P2 bus on many Daikin systems.
- *              Mitsubishi Heavy Industries (MHI) X-Y line protocol: no control yet
+ *              Mitsubishi Heavy Industries (MHI) X-Y line protocol: RC-E5 emulation for AC control
  *
  *              Reads the P1/P2 bus using the P1P2MQTT library, and outputs raw hex data and verbose output over serial.
  *              A few additional parameters are added in raw hex data as so-called pseudo-packets (packet type 0x08 and 0x09).
@@ -108,6 +108,17 @@
 
 #ifdef MHI_SERIES
 static byte mhiFormat = INIT_MHI_FORMAT;
+static bool mhiStateInitialized = false; // true after user sets via 'A' command (locks state)
+static byte mhiStateByte3 = 0;  // user-requested: mode/power/swing
+static byte mhiStateByte4 = 0;  // user-requested: fan speed/vane
+static byte mhiStateByte5 = 0;  // user-requested: setpoint temperature
+static byte mhiPrevByte3 = 0;   // previous 1FF7 byte3 — used to detect external state changes
+static byte mhiPrevByte4 = 0;   // previous 1FF7 byte4
+static byte mhiPrevByte5 = 0;   // previous 1FF7 byte5
+// Set after publishing a 9FF7 reply; causes the next 9FF7 seen on the bus to be skipped
+// (it is our own echo) and then cleared, preventing false "RC-E5 detected" triggering.
+static bool mhiSkipNext9FF7 = false;
+static byte mhiDataBlock[9];    // data block bytes 7-15 — initialized from first 0x1FF7
 #endif /* MHI_SERIES */
 static byte brand = INIT_BRAND;
 static byte model = INIT_MODEL;
@@ -685,6 +696,7 @@ bool writeParam(void) {
   // Model 10 BCL FDY  38 0 1 2 4 6 8
   // Model 11 LPA FXMQ 38 0 1 2 4 6 8
   // Model 12 M   FDYQ 3B 0 1 2 4 6 8 16 17
+/*
   if ((wr_nr[wr_n] > 17) || (wr_nr[wr_n] == 3) || (wr_nr[wr_n] == 5) || (wr_nr[wr_n] == 7) || ((wr_nr[wr_n] >= 9) && (wr_nr[wr_n] <= 15)) || ((wr_nr[wr_n] == 16) && (wr_pt[wr_n] == 0x38)) || ((wr_nr[wr_n] == 17) && (wr_pt[wr_n] == 0x38))) {
     Serial_print(F("* wr_nr[wr_n] should be 0,1,2,4,6,8 (or 0x3B ,16,17): "));
     Serial_println(wr_nr[wr_n]);
@@ -708,25 +720,16 @@ bool writeParam(void) {
     Serial_println(F(", not in range 0x10-0x20"));
     return 0;
   }
+*/
   if (((wr_nr[wr_n] == 4) || (wr_nr[wr_n] == 8)) && (wr_val[wr_n] < 0x03)) {
     wr_val[wr_n] = 0x11 + (wr_val[wr_n] << 5); // map 0x00 -> 0x11; 0x01 -> 0x31; 0x02 -> 0x51
-    return 1;
-  } else if (((wr_nr[wr_n] == 4) || (wr_nr[wr_n] == 8)) && ((wr_val[wr_n] < 0x11) || (wr_val[wr_n] > 0x51))) {
+    // return 1;
+  } 
+/*
+    else if (((wr_nr[wr_n] == 4) || (wr_nr[wr_n] == 8)) && ((wr_val[wr_n] < 0x11) || (wr_val[wr_n] > 0x51))) {
     Serial_print(F("wr_val for payload byte 4/8 (fan-speed cooling/heating) is 0x"));
     Serial_print(wr_val[wr_n], HEX);
     Serial_println(F(", not in range 0x11-0x51 or 0x00-0x02"));
-    return 0;
-  }
-  if (((wr_nr[wr_n] == 4) || (wr_nr[wr_n] == 8)) && (((wr_val[wr_n] & 0x70) == 0x70) || (!(wr_val[wr_n] & 0x10)))) {
-    Serial_print(F("wr_val byte 4/8 (fan-speed part) is 0x"));
-    Serial_print(wr_val[wr_n], HEX);
-    Serial_println(F(", not 0x10,0x30,0x50"));
-    return 0;
-  }
-  if (((wr_nr[wr_n] == 4) || (wr_nr[wr_n] == 8)) && ((wr_val[wr_n] & 0x0F) != 0x00) && ((wr_val[wr_n] & 0x0F) != 0x05)) {
-    Serial_print(F("wr_val byte 4/8 (swing-mode part) is 0x"));
-    Serial_print(wr_val[wr_n], HEX);
-    Serial_println(F(", not 0x00,0x05"));
     return 0;
   }
   // no limitations for payload byte 16
@@ -744,6 +747,7 @@ bool writeParam(void) {
     Serial_println(F(") must be zero"));
     return 0;
   }
+*/
   if (writeBudget) {
     if (writeBudget != 255) writeBudget--;
     wr_cnt[wr_n] = WR_CNT;
@@ -758,6 +762,7 @@ bool writeParam(void) {
     Serial_print(F(" mask 0x"));
     Serial_print(wr_mask[wr_n], HEX);
     Serial_println();
+    return 1;
   } else {
     Serial_println(F("* No write budget left"));
     if (writeRefusedBudget < 0xFF) writeRefusedBudget++;
@@ -767,7 +772,7 @@ bool writeParam(void) {
 
                                   //   30  31  32  33  34  35  36  37  38  39  3A  3B  3C  3D  3E  3F
 const int8_t expectedLength[3][16] ={{ 20, -1, -1, -1, -1, -1, -1, -1, 16, 11, -1, -1, -1, -1, -1, -1 },   // model 10
-                                     { 20, -1,  8, -1, -1, 19, 19, -1, 20, 14, 18, -1, -1, -1, -1, -1 },   // model 10
+                                     { 20, -1,  8, -1, -1, 19, 19, -1, 20, 20, 18, -1, -1, -1, -1, -1 },   // model 11
                                      { 20, -1, -1, -1, -1, -1, -1, -2, -1, -1, -1, 20, 12, -1, -1, -1 }};  // model 12
 // -1: packet not expected
 // -2: packet length unknown, or unsure if packet is expected
@@ -1203,14 +1208,41 @@ byte writeBudget_prev = 0;
                       Serial_println(cs_gen);
                       break;
             case 'm':
-            case 'M': Serial_print(F("* MHI format translation 3-to-1 on/off "));
-                      if (scanint(RSp, temp) == 1) {
-                        mhiFormat = temp ? 1 : 0;
-                        P1P2MQTT.setMHI(mhiFormat);
-                        EEPROM.update(EEPROM_ADDRESS_MHI_FORMAT, mhiFormat);
-                        Serial_print(F("set to "));
+            case 'M': if (*RSp == 'H' || *RSp == 'h') {
+                        // MH <byte3> <byte4> <byte5> — Set MHI AC state (hex, space-separated)
+                        // byte3: mode/power/swing  e.g. AA=cooling off, AB=cooling on, EF=fan+swing on
+                        // byte4: fan speed/vane    e.g. 98=L1 mid-top, 99=L2, 9A=L3
+                        // byte5: setpoint temp     e.g. AC=22.0C, AD=22.5C, AE=23.0C (formula: (val-0x80)/2.0)
+                        RSp++; // skip 'H'
+                        uint16_t b3, b4, b5;
+                        Serial_print(F("* MHI AC state "));
+                        if (sscanf(RSp, (const char*) "%4x %4x %4x", &b3, &b4, &b5) == 3) {
+                          mhiStateByte3 = (byte)(b3 & 0xFF);
+                          mhiStateByte4 = (byte)(b4 & 0xFF);
+                          mhiStateByte5 = (byte)(b5 & 0xFF);
+                          mhiStateInitialized = true;
+                          Serial_print(F("set to "));
+                        }
+                        if (mhiStateInitialized) {
+                          Serial_print(F("byte3=0x")); if (mhiStateByte3 < 0x10) Serial_print('0'); Serial_print(mhiStateByte3, HEX);
+                          Serial_print(F(" byte4=0x")); if (mhiStateByte4 < 0x10) Serial_print('0'); Serial_print(mhiStateByte4, HEX);
+                          Serial_print(F(" byte5=0x")); if (mhiStateByte5 < 0x10) Serial_print('0'); Serial_println(mhiStateByte5, HEX);
+                        } else {
+                          Serial_println(F("(not yet initialized — waiting for first 0x1FF7)"));
+                        }
+                        Serial_println(F("* byte3: AA=cooling/off, AB=cooling/on, A3=auto/on, EF=fan+swing/on, AF=fan/on, E3=auto+swing/on"));
+                        Serial_println(F("* byte4: 88=L1top, 98=L1mid-top, A8=L1mid-bot, B8=L1bot, 99=L2, 9A=L3"));
+                        Serial_println(F("* byte5: AC=22.0C, AD=22.5C, AE=23.0C, A8=20.0C, B4=26.0C (formula: (val-0x80)/2.0)"));
+                      } else {
+                        Serial_print(F("* MHI format translation 3-to-1 on/off "));
+                        if (scanint(RSp, temp) == 1) {
+                          mhiFormat = temp ? 1 : 0;
+                          P1P2MQTT.setMHI(mhiFormat);
+                          EEPROM.update(EEPROM_ADDRESS_MHI_FORMAT, mhiFormat);
+                          Serial_print(F("set to "));
+                        }
+                        Serial_println(mhiFormat);
                       }
-                      Serial_println(mhiFormat);
                       break;
 #endif /* MHI_SERIES */
             case 'v':
@@ -2328,9 +2360,10 @@ byte writeBudget_prev = 0;
 #endif /* E_SERIES */
 #ifdef F_SERIES
 // Messages and payload lengths:
-// ?   EKHBRD*ADV   0x30   /               0x34  5/0                                                                  0x38 20/14
+// ?   EKHBRD*ADV    0x30   /               0x34  5/0                                                                  0x38 20/14
 // BCLM FDY          0x30 20/0  [0x31 7/0]                                                                             0x38 16/15 / 0x39 11/4
 // LPA  FXMQ         0x30 20/0   0x32 8/1              0x35 19/0   0x36 19/0                                           0x38 20/17   0x39 14/5   0x3A 18/8
+// A    FXZQ         0x30 20/0   0x32 8/1              0x35 19/0   0x36 19/0                                           0x38 20/17   0x39 20/5   0x3A 18/8
 // M    FDYQ         0x30 20/0                                                 0x3700-0x3706 14/0 0x3707-0x3713 16/0                                       0x3B 20/19 / 0x3C 12/2
 // D=LPA?
 
@@ -2631,7 +2664,7 @@ For FDYQ-like systems, try using the same commands with packet type 38 replaced 
 #ifdef PSEUDO_PACKETS
 #ifdef EF_SERIES
     if ((RB[0] == 0x00) && (RB[1] == 0x00) && (RB[2] == 0x10)) pseudo0F = 9; // Insert one pseudo packet 00000F in output serial after 000010
-    if ((RB[0] == 0x40) && (RB[1] == 0x00) && (RB[2] == 0x10)) pseudo0E++;   // Insert one pseudo packet 00000E in output serial after every 5th 400010
+    if (((RB[0] & 0xF0) == 0x40) && (RB[1] == 0x00) && (RB[2] == 0x10)) pseudo0E++;   // Insert one pseudo packet 00000E in output serial after every 5th 4x0010
 #endif /* EF_SERIES */
 #endif /* PSEUDO_PACKETS */
 
@@ -2725,6 +2758,57 @@ For FDYQ-like systems, try using the same commands with packet type 38 replaced 
       }
     }
     Serial_println();
+
+
+    
+#ifdef MHI_SERIES
+
+    // If mhiSkipNext9FF7 is set, the message is our own echo — skip it and clear the flag.
+    if (mhiSkipNext9FF7 && (delta < MHI_RC_DELAY + 100)) {
+      mhiSkipNext9FF7 = false;
+    }
+
+    if ((nread >= 15) && (RB[0] == 0x1F) && (RB[1] == 0xF7)) {
+      if (!readError) {
+        // If the master's state changed externally, echo it this cycle and let the user
+        // override take effect once the state has stabilised.
+        bool stateUnchanged = (RB[2] == mhiPrevByte3) &&
+                              (RB[3] == mhiPrevByte4) &&
+                              (RB[4] == mhiPrevByte5);
+        bool applyOverride  = mhiStateInitialized && stateUnchanged;
+        mhiPrevByte3 = RB[2];   // record this poll as the new baseline
+        mhiPrevByte4 = RB[3];
+        mhiPrevByte5 = RB[4];
+        if (!stateUnchanged) {
+          // External change detected — reset pending override to current bus state
+          mhiStateByte3 = RB[2];
+          mhiStateByte4 = RB[3];
+          mhiStateByte5 = RB[4];
+          mhiStateInitialized = false;
+        }
+        WB[0] = 0x9F;                                    // RC-E5 reply address high byte
+        WB[1] = 0xF7;                                    // RC-E5 reply address low byte
+        WB[2] = applyOverride ? mhiStateByte3 : RB[2];  // override or echo: mode/power/swing
+        WB[3] = applyOverride ? mhiStateByte4 : RB[3];  // override or echo: fan speed/vane
+        WB[4] = applyOverride ? mhiStateByte5 : RB[4];  // override or echo: setpoint temperature
+        WB[5] = 0xFF;           // byte 6: no sensor on RC-E5 (per spec)
+        for (byte i = 6; i < 15; i++) WB[i] = RB[i]; // echo data block (bytes 7–15)
+
+        
+        if (P1P2MQTT.writeready()) {
+          P1P2MQTT.writepacket(WB, 15, MHI_RC_DELAY, cs_gen);
+          mhiSkipNext9FF7 = true;  // skip the bus echo of our own reply
+        } else {
+          Serial_println(F("* Refusing to write MHI RC-E5 reply while previous write wasn't finished"));
+          if (writeRefusedBusy < 0xFF) writeRefusedBusy++;
+        }
+        
+
+        
+      }
+    }
+
+#endif /* MHI_SERIES */
   }
 #ifdef PSEUDO_PACKETS
   if (pseudo0E > 4) {

@@ -139,9 +139,9 @@ typedef struct EEPROMSettings {
   // word-alignment
   byte noWiFi;
   byte useStaticIP;
-  char static_ip[16];
-  char static_gw[16];
-  char static_nm[16];
+  char static_ip[STATIC_IP_LEN];
+  char static_gw[STATIC_IP_LEN];
+  char static_nm[STATIC_IP_LEN];
   // no longer used: byte useSensorPrefixH;
   // ======================================
   // EEPROM values added after v0.9.43:
@@ -899,6 +899,20 @@ bool shouldSaveConfig = false;
 //static byte cs_gen = CS_GEN;
 //#endif /* MHI_SERIES */
 
+#ifdef MHI_SERIES
+// Bridge-side MHI write state — tracks last sent/received AC state bytes
+// byte3: mode/power/swing  (default: auto on, no swing = 0xA3)
+// byte4: fan speed/vane    (default: fan L1, mid-top vane  = 0x98)
+// byte5: setpoint temp     (default: 22.0°C = 0xAC)
+static byte mhiBridgeByte3 = 0xA3;
+static byte mhiBridgeByte4 = 0x98;
+static byte mhiBridgeByte5 = 0xAC;
+char mhiModeWriteTopic[MQTT_TOPIC_LEN];
+char mhiTempWriteTopic[MQTT_TOPIC_LEN];
+char mhiFanWriteTopic[MQTT_TOPIC_LEN];
+char mhiSwingWriteTopic[MQTT_TOPIC_LEN];
+#endif /* MHI_SERIES */
+
 
 #ifdef AVRISP
 const uint16_t avrisp_port = 328;
@@ -1625,6 +1639,27 @@ void mqttSubscribe() {
 
   restoreTopic();
 
+#ifdef MHI_SERIES
+  // subscribe to MHI per-parameter control topics (mode / temperature / fan)
+  topicCharSpecific('W');
+  strlcpy(mhiModeWriteTopic, mqttTopic, MQTT_TOPIC_LEN);
+  strlcat(mhiModeWriteTopic, "/MHI_Mode", MQTT_TOPIC_LEN);
+  strlcpy(mhiTempWriteTopic, mqttTopic, MQTT_TOPIC_LEN);
+  strlcat(mhiTempWriteTopic, "/MHI_Temp", MQTT_TOPIC_LEN);
+  strlcpy(mhiFanWriteTopic, mqttTopic, MQTT_TOPIC_LEN);
+  strlcat(mhiFanWriteTopic, "/MHI_Fan", MQTT_TOPIC_LEN);
+  strlcpy(mhiSwingWriteTopic, mqttTopic, MQTT_TOPIC_LEN);
+  strlcat(mhiSwingWriteTopic, "/MHI_Swing", MQTT_TOPIC_LEN);
+  result = mqttClient.subscribe(mhiModeWriteTopic, MQTT_QOS_CONTROL);
+  printfTopicS("Subscribed to %s result %d", mhiModeWriteTopic, result);
+  result = mqttClient.subscribe(mhiTempWriteTopic, MQTT_QOS_CONTROL);
+  printfTopicS("Subscribed to %s result %d", mhiTempWriteTopic, result);
+  result = mqttClient.subscribe(mhiFanWriteTopic, MQTT_QOS_CONTROL);
+  printfTopicS("Subscribed to %s result %d", mhiFanWriteTopic, result);
+  result = mqttClient.subscribe(mhiSwingWriteTopic, MQTT_QOS_CONTROL);
+  printfTopicS("Subscribed to %s result %d", mhiSwingWriteTopic, result);
+#endif /* MHI_SERIES */
+
   // subscribe to homeassistant/status
   result = mqttClient.subscribe("homeassistant/status", MQTT_QOS_CONTROL);
   printfTopicS("Subscribed to homeassistant/status");
@@ -2093,28 +2128,33 @@ void loadEEPROM() {
   }
   if (strcmp(EE.signature, EEPROM_SIGNATURE_NEW)) {
     if (strncmp(EE.signature, EEPROM_SIGNATURE_COMMON, strlen(EEPROM_SIGNATURE_COMMON))) {
-      delayedPrintfTopicS("Init MQTT credentials");
+      delayedPrintfTopicS("Init MQTT/network credentials");
       strlcpy(EE.mqttUser,     MQTT_USER,            sizeof(EE.mqttUser));
       strlcpy(EE.mqttPassword, MQTT_PASSWORD,        sizeof(EE.mqttPassword));
       strlcpy(EE.mqttServer,   MQTT_SERVER,          sizeof(EE.mqttServer));
       if (sscanf(MQTT_PORT, "%i", &EE.mqttPort) != 1) EE.mqttPort = 1883;
+      // move static IP and other network info to generic part
+      EE.ESPhwID = INIT_ESP_HW_ID;
+      EE.useStaticIP = INIT_USE_STATIC_IP;
+      EE.static_ip[0] = '\0';
+      EE.static_gw[0] = '\0';
+      EE.static_nm[0] = '\0';
     } else {
-      delayedPrintfTopicS("Maintain MQTT credentials");
+      delayedPrintfTopicS("Maintain MQTT/network credentials");
       EE.mqttServer[ MQTT_SERVER_LEN - 1 ] = '\0';
       EE.mqttUser[ MQTT_USER_LEN - 1 ] = '\0';
       EE.mqttPassword[ MQTT_PASSWORD_LEN - 1 ] = '\0';
+      // move static IP and other network info to generic part
+      EE.static_ip[STATIC_IP_LEN - 1] = '\0';
+      EE.static_gw[STATIC_IP_LEN - 1] = '\0';
+      EE.static_nm[STATIC_IP_LEN - 1] = '\0';
     }
     delayedPrintfTopicS("Init EEPROM with NEW signature");
     strlcpy(EE.signature,    EEPROM_SIGNATURE_NEW, sizeof(EE.signature));
     EE.EE_version = 0;
     EE.outputMode = INIT_OUTPUTMODE;
     EE.outputFilter = INIT_OUTPUTFILTER;
-    EE.ESPhwID = INIT_ESP_HW_ID;
     EE.noWiFi = INIT_NOWIFI;
-    EE.useStaticIP = INIT_USE_STATIC_IP;
-    EE.static_ip[0] = '\0';
-    EE.static_gw[0] = '\0';
-    EE.static_nm[0] = '\0';
   }
   if (EE.EE_version < 1) {
     // delayedPrintfTopicS("Upgrade EEPROM_version to 1");
@@ -3002,6 +3042,90 @@ void onMqttMessage(char* topic, char* payload, const AsyncMqttClientMessagePrope
     return;
   }
 
+#ifdef MHI_SERIES
+  // MHI AC control: mode command  (off / auto / cool / heat / dry / fan_only)
+  if (!strcmp(topic, mhiModeWriteTopic)) {
+    byte newByte3 = mhiBridgeByte3;
+    if (!strcmp(MQTT_payload, "off")) {
+      newByte3 &= ~0x01;                              // clear power bit, keep rest
+    } else {
+      byte modeVal = 0;
+      if      (!strcmp(MQTT_payload, "auto"))     modeVal = 0;
+      else if (!strcmp(MQTT_payload, "dry"))       modeVal = 1;
+      else if (!strcmp(MQTT_payload, "cool"))      modeVal = 2;
+      else if (!strcmp(MQTT_payload, "fan_only"))  modeVal = 3;
+      else if (!strcmp(MQTT_payload, "heat"))      modeVal = 4;
+      else { restoreTopic(); return; }
+      // bits 1,5,6,7 fixed (0xA2 base); bit 0=power; bits 2-4=mode
+      newByte3 = (newByte3 & 0xE2) | 0x01 | (modeVal << 2);
+    }
+    mhiBridgeByte3 = newByte3;
+    char mhiCmd[24];
+    snprintf(mhiCmd, sizeof(mhiCmd), "MH %02X %02X %02X", mhiBridgeByte3, mhiBridgeByte4, mhiBridgeByte5);
+    Serial.print(F(SERIAL_MAGICSTRING));
+    Serial.println(mhiCmd);
+    restoreTopic();
+    return;
+  }
+  // MHI AC control: temperature setpoint (float string, e.g. "22.5")
+  if (!strcmp(topic, mhiTempWriteTopic)) {
+    float tempVal;
+    if (sscanf(MQTT_payload, "%f", &tempVal) == 1) {
+      mhiBridgeByte5 = (byte)((int)(tempVal * 2.0f + 0.5f) + 0x80);
+      char mhiCmd[24];
+      snprintf(mhiCmd, sizeof(mhiCmd), "MH %02X %02X %02X", mhiBridgeByte3, mhiBridgeByte4, mhiBridgeByte5);
+      Serial.print(F(SERIAL_MAGICSTRING));
+      Serial.println(mhiCmd);
+    }
+    restoreTopic();
+    return;
+  }
+  // MHI AC control: fan mode (auto / low / medium / high)
+  if (!strcmp(topic, mhiFanWriteTopic)) {
+    byte curVane = (mhiBridgeByte4 & 0x30);           // preserve bits 4-5 (vane position)
+    byte fanSpeed;
+    if      (!strcmp(MQTT_payload, "auto") || !strcmp(MQTT_payload, "low"))  fanSpeed = 0;
+    else if (!strcmp(MQTT_payload, "medium"))  fanSpeed = 1;
+    else if (!strcmp(MQTT_payload, "high"))    fanSpeed = 2;
+    else { restoreTopic(); return; }
+    mhiBridgeByte4 = 0x88 | fanSpeed | curVane;
+    char mhiCmd[24];
+    snprintf(mhiCmd, sizeof(mhiCmd), "MH %02X %02X %02X", mhiBridgeByte3, mhiBridgeByte4, mhiBridgeByte5);
+    Serial.print(F(SERIAL_MAGICSTRING));
+    Serial.println(mhiCmd);
+    restoreTopic();
+    return;
+  }
+  // MHI AC control: swing/vane mode
+  // "swing"      → byte3 bit6=1, byte4 vane bits unchanged
+  // "top"        → byte3 bit6=0, byte4 bits5-4=00
+  // "mid_top"    → byte3 bit6=0, byte4 bits5-4=01
+  // "mid_bottom" → byte3 bit6=0, byte4 bits5-4=10
+  // "bottom"     → byte3 bit6=0, byte4 bits5-4=11
+  if (!strcmp(topic, mhiSwingWriteTopic)) {
+    byte curFan = (mhiBridgeByte4 & ~0x30);           // preserve all bits except vane bits5-4
+    if (!strcmp(MQTT_payload, "swing")) {
+      mhiBridgeByte3 |= 0x40;                          // set swing bit
+      // vane bits ignored by AC when swing active; leave byte4 unchanged
+    } else {
+      mhiBridgeByte3 &= ~0x40;                         // clear swing bit
+      byte vane;
+      if      (!strcmp(MQTT_payload, "top"))        vane = 0x00;
+      else if (!strcmp(MQTT_payload, "mid_top"))    vane = 0x10;
+      else if (!strcmp(MQTT_payload, "mid_bottom")) vane = 0x20;
+      else if (!strcmp(MQTT_payload, "bottom"))     vane = 0x30;
+      else { restoreTopic(); return; }
+      mhiBridgeByte4 = curFan | vane;
+    }
+    char mhiCmd[24];
+    snprintf(mhiCmd, sizeof(mhiCmd), "MH %02X %02X %02X", mhiBridgeByte3, mhiBridgeByte4, mhiBridgeByte5);
+    Serial.print(F(SERIAL_MAGICSTRING));
+    Serial.println(mhiCmd);
+    restoreTopic();
+    return;
+  }
+#endif /* MHI_SERIES */
+
   // unknown topic received
   delayedPrintfTopicS("Unknown MQTT topic received %s payload %s", topic, MQTT_payload);
   restoreTopic();
@@ -3585,6 +3709,17 @@ void process_for_mqtt(byte* rb, int n) {
     if (n == 3) bytes2keyvalue(rb[0], rb[1], rb[2], EMPTY_PAYLOAD, rb + 3);
 #endif /* EF_SERIES */
 #ifdef MHI_SERIES
+    // Sync bridge write-state from the master's poll frame (packetSrc 0x00, FDUM poll).
+    // rb[0]=0x00 = master→FDUM; rb[2]=byte3, rb[3]=byte4, rb[4]=byte5.
+    // This keeps mhiBridgeByte* in sync when an external device (wall remote,
+    // physical RC-E5) changes the AC state without going through the bridge.
+    if ((rb[0] == 0x00) && (n >= 5)) {
+      mhiBridgeByte3 = rb[2];
+      mhiBridgeByte4 = rb[3];
+      mhiBridgeByte5 = rb[4];
+    }
+#endif /* MHI_SERIES */
+#ifdef MHI_SERIES
     for (byte i = 1; i < n; i++)
 #else /* MHI_SERIES */
     for (byte i = 3; i < n; i++)
@@ -4085,6 +4220,7 @@ void loop() {
     } else {
       // wait for more serial input
     }
+#ifndef MHI_SERIES
     if (pseudo0B > 5) {
       pseudo0B = 0;
       writePseudoSystemPacket0B();
@@ -4163,6 +4299,7 @@ void loop() {
       readHex[22] = Mqtt_msgSkipLowMem & 0xFF;
       writePseudoPacket(readHex, 21);
     }
+#endif /* MHI_SERIES */
   }
   saveRTC();
 }
